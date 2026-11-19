@@ -56,7 +56,7 @@ def ejecutar_nivelacion():
         # 4. Limpieza de datos blindada
         # Obligamos a limpiar espacios ocultos y forzamos minúsculas para empatar perfectamente
         df_shops['Brand_name_corregido'] = df_shops['Brand_name_corregido'].astype(str).str.strip()
-        df_shops['BD'] = df_shops['BD'].astype(str).str.strip().lower() # ESTA ES LA CLAVE
+        df_shops['BD'] = df_shops['BD'].astype(str).str.strip().str.lower() # ESTA ES LA CLAVE
         df_shops['Avg Daily Orders'] = pd.to_numeric(df_shops['Avg Daily Orders'], errors='coerce').fillna(0)
         df_shops['Shops'] = pd.to_numeric(df_shops['Shops'], errors='coerce').fillna(0)
         df_shops['is_fixed'] = df_shops['Puede reasignarse esta brand?'].str.strip().str.lower() == 'no'
