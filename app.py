@@ -47,7 +47,9 @@ def ejecutar_nivelacion():
             'Brand_name_corregido', 'BD', 'holding_id', 'Shops', 'Avg Daily Orders', 'Puede reasignarse esta brand?'
         ])
 
-        # 4. Limpieza de datos
+        # 4. Limpieza de datos blindada
+        # Obligamos a limpiar espacios ocultos en los nombres para que empaten perfecto con Portfolio
+        df_shops['Brand_name_corregido'] = df_shops['Brand_name_corregido'].astype(str).str.strip()
         df_shops['Avg Daily Orders'] = pd.to_numeric(df_shops['Avg Daily Orders'], errors='coerce').fillna(0)
         df_shops['Shops'] = pd.to_numeric(df_shops['Shops'], errors='coerce').fillna(0)
         df_shops['is_fixed'] = df_shops['Puede reasignarse esta brand?'].str.strip().str.lower() == 'no'
@@ -75,19 +77,18 @@ def ejecutar_nivelacion():
             current_bd=('BD', lambda val: val.mode()[0] if not val.mode().empty else None)
         ).reset_index()
 
-      # 7. Modelo de Optimización (Sintaxis Blindada para Render)
+        # 7. Modelo de Optimización
         holdings = df_holdings['holding_id'].tolist()
         bds = bd_list
 
         h_do = df_holdings.set_index('holding_id')['total_do'].to_dict()
         h_shops = df_holdings.set_index('holding_id')['total_shops'].to_dict()
-        h_brands = df_holdings.set_index('holding_id')['total_brands'].to_dict() # <-- AÑADIDO: Diccionario de marcas
+        h_brands = df_holdings.set_index('holding_id')['total_brands'].to_dict() 
         h_reassign = df_holdings.set_index('holding_id')['is_reassignable'].to_dict()
         h_current_bd = df_holdings.set_index('holding_id')['current_bd'].to_dict()
 
         prob = pulp.LpProblem("Balanceo_Holdings", pulp.LpMinimize)
 
-        # Usando la sintaxis manual que funcionó en Render
         x = {}
         for h in holdings:
             x[h] = {}
@@ -95,23 +96,29 @@ def ejecutar_nivelacion():
                 nombre = f"Asig_{str(h).replace(' ', '_').replace('.', '_')}_{str(b).replace(' ', '_').replace('.', '_')}"
                 x[h][b] = pulp.LpVariable(nombre, 0, 1, pulp.LpBinary)
 
-        min_do = pulp.LpVariable("Min_DO", 0, None, pulp.LpContinuous)
-        max_do = pulp.LpVariable("Max_DO", 0, None, pulp.LpContinuous)
-        min_sh = pulp.LpVariable("Min_Sh", 0, None, pulp.LpContinuous)
-        max_sh = pulp.LpVariable("Max_Sh", 0, None, pulp.LpContinuous)
-        min_br = pulp.LpVariable("Min_Br", 0, None, pulp.LpContinuous)
-        max_br = pulp.LpVariable("Max_Br", 0, None, pulp.LpContinuous)
+        # Configuramos los Targets ideales por ejecutivo
+        target_do = sum(h_do.values()) / len(bds) if len(bds) > 0 else 1
+        target_sh = sum(h_shops.values()) / len(bds) if len(bds) > 0 else 1
+        target_br = sum(h_brands.values()) / len(bds) if len(bds) > 0 else 1
 
-        # Pesos Dinámicos
-        sum_do = sum(h_do.values())
-        sum_sh = sum(h_shops.values())
-        sum_br = sum(h_brands.values())
+        dev_do_pos = pulp.LpVariable.dicts("Dev_DO_Pos", bds, 0, None, pulp.LpContinuous)
+        dev_do_neg = pulp.LpVariable.dicts("Dev_DO_Neg", bds, 0, None, pulp.LpContinuous)
+        dev_sh_pos = pulp.LpVariable.dicts("Dev_Sh_Pos", bds, 0, None, pulp.LpContinuous)
+        dev_sh_neg = pulp.LpVariable.dicts("Dev_Sh_Neg", bds, 0, None, pulp.LpContinuous)
+        dev_br_pos = pulp.LpVariable.dicts("Dev_Br_Pos", bds, 0, None, pulp.LpContinuous)
+        dev_br_neg = pulp.LpVariable.dicts("Dev_Br_Neg", bds, 0, None, pulp.LpContinuous)
 
         peso_do = 1
-        peso_sh = (sum_do / sum_sh) if sum_sh > 0 else 1
-        peso_br = (sum_do / sum_br) if sum_br > 0 else 1
+        peso_sh = (target_do / target_sh) * 10 if target_sh > 0 else 1 
+        peso_br = (target_do / target_br) * 10 if target_br > 0 else 1
 
-        prob += peso_do * (max_do - min_do) + peso_sh * (max_sh - min_sh) + peso_br * (max_br - min_br)
+        # Minimizar el error en lugar de bloquear el modelo con límites rígidos
+        prob += pulp.lpSum(
+            peso_do * (dev_do_pos[b] + dev_do_neg[b]) + 
+            peso_sh * (dev_sh_pos[b] + dev_sh_neg[b]) + 
+            peso_br * (dev_br_pos[b] + dev_br_neg[b]) 
+            for b in bds
+        )
 
         for h in holdings:
             prob += pulp.lpSum(x[h][b] for b in bds) == 1
@@ -123,23 +130,22 @@ def ejecutar_nivelacion():
         for b in bds:
             c_do = pulp.lpSum(x[h][b] * h_do[h] for h in holdings)
             c_sh = pulp.lpSum(x[h][b] * h_shops[h] for h in holdings)
-            c_br = pulp.lpSum(x[h][b] * h_brands[h] for h in holdings) # <-- AÑADIDO: Cálculo de marcas
+            c_br = pulp.lpSum(x[h][b] * h_brands[h] for h in holdings) 
 
-            prob += c_do >= min_do
-            prob += c_do <= max_do
-            prob += c_sh >= min_sh
-            prob += c_sh <= max_sh
-            prob += c_br >= min_br # <-- AÑADIDO: Restricción de marcas
-            prob += c_br <= max_br # <-- AÑADIDO: Restricción de marcas
+            prob += c_do - dev_do_pos[b] + dev_do_neg[b] == target_do
+            prob += c_sh - dev_sh_pos[b] + dev_sh_neg[b] == target_sh
+            prob += c_br - dev_br_pos[b] + dev_br_neg[b] == target_br
 
         prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=120))
         
         status_modelo = pulp.LpStatus[prob.status]
 
         if prob.status == 1:
-            # 8. Actualizar Sheets si es óptimo
-            asig_map = {h: b for h in holdings for b in bds if pulp.value(x[h][b]) > 0.5}
-            df_shops['Assigned_BD'] = df_shops['holding_id'].map(asig_map)
+            # 8. Actualizar Sheets si es óptimo (Aplicando la corrección de > 0.5)
+            asig_map = {h: b for h in holdings for b in bds if pulp.value(x[h][b]) is not None and pulp.value(x[h][b]) > 0.5}
+            
+            # Fillna evita que los valores nulos crasheen Google Sheets
+            df_shops['Assigned_BD'] = df_shops['holding_id'].map(asig_map).fillna("Sin Asignar")
             df_shops['Hubo_Cambio'] = df_shops.apply(
                 lambda row: "SÍ" if str(row['BD']).strip() != str(row['Assigned_BD']).strip() else "NO", axis=1
             )
@@ -161,7 +167,7 @@ def ejecutar_nivelacion():
             for row_idx, row in enumerate(portfolio_data[1:], start=1):
                 brand_name = str(row[idx_brand]).strip()
                 if brand_name in dict_assigned:
-                    updates_al_am[row_idx] = [dict_assigned[brand_name], dict_cambio[brand_name]]
+                    updates_al_am[row_idx] = [dict_assigned.get(brand_name, ""), dict_cambio.get(brand_name, "")]
 
             rango_update = f'AL1:AM{len(updates_al_am)}'
             worksheet_portfolio.update(values=updates_al_am, range_name=rango_update)
