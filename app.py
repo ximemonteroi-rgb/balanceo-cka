@@ -37,10 +37,16 @@ def ejecutar_nivelacion():
 
         # 3. Leer Inputs
         escenario = worksheet_summary.acell('B10').value
+        if escenario:
+            escenario = escenario.strip()
+            
         bd_objetivo = worksheet_summary.acell('C10').value
+        if bd_objetivo:
+            bd_objetivo = bd_objetivo.strip().lower() # Eliminamos espacios y forzamos minúsculas
 
         current_bds_raw = worksheet_summary.get('B15:B23')
-        bd_list_base = [row[0].strip() for row in current_bds_raw if row and str(row[0]).strip() not in ('', '0')]
+        # Limpieza extrema de la lista de BDs base
+        bd_list_base = [str(row[0]).strip().lower() for row in current_bds_raw if row and str(row[0]).strip() not in ('', '0')]
 
         data_summary = worksheet_summary.get('B32:G')
         df_shops = pd.DataFrame(data_summary[1:], columns=[
@@ -48,8 +54,9 @@ def ejecutar_nivelacion():
         ])
 
         # 4. Limpieza de datos blindada
-        # Obligamos a limpiar espacios ocultos en los nombres para que empaten perfecto con Portfolio
+        # Obligamos a limpiar espacios ocultos y forzamos minúsculas para empatar perfectamente
         df_shops['Brand_name_corregido'] = df_shops['Brand_name_corregido'].astype(str).str.strip()
+        df_shops['BD'] = df_shops['BD'].astype(str).str.strip().lower() # ESTA ES LA CLAVE
         df_shops['Avg Daily Orders'] = pd.to_numeric(df_shops['Avg Daily Orders'], errors='coerce').fillna(0)
         df_shops['Shops'] = pd.to_numeric(df_shops['Shops'], errors='coerce').fillna(0)
         df_shops['is_fixed'] = df_shops['Puede reasignarse esta brand?'].str.strip().str.lower() == 'no'
@@ -58,13 +65,11 @@ def ejecutar_nivelacion():
         # 5. Lógica de Escenarios
         bd_list = bd_list_base.copy()
         if escenario == 'Termination' and bd_objetivo:
-            bd_objetivo = bd_objetivo.strip()
             if bd_objetivo in bd_list:
                 bd_list.remove(bd_objetivo)
             cuentas_liberadas = df_shops['BD'] == bd_objetivo
             df_shops.loc[cuentas_liberadas, 'is_fixed'] = False
         elif escenario == 'New Hire' and bd_objetivo:
-            bd_objetivo = bd_objetivo.strip()
             if bd_objetivo not in bd_list:
                 bd_list.append(bd_objetivo)
 
