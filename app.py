@@ -138,7 +138,7 @@ def ejecutar_nivelacion():
 
         if prob.status == 1:
             # 8. Actualizar Sheets si es óptimo
-            asig_map = {h: b for h in holdings for b in bds if pulp.value(x[h][b]) == 1}
+            asig_map = {h: b for h in holdings for b in bds if pulp.value(x[h][b]) > 0.5}
             df_shops['Assigned_BD'] = df_shops['holding_id'].map(asig_map)
             df_shops['Hubo_Cambio'] = df_shops.apply(
                 lambda row: "SÍ" if str(row['BD']).strip() != str(row['Assigned_BD']).strip() else "NO", axis=1
