@@ -70,16 +70,18 @@ def ejecutar_nivelacion():
         df_holdings = df_shops.groupby('holding_id').agg(
             total_do=('Avg Daily Orders', 'sum'),
             total_shops=('Shops', 'sum'),
+            total_brands=('Brand_name_corregido', 'nunique'),
             is_reassignable=('is_fixed', lambda val: not val.any()),
             current_bd=('BD', lambda val: val.mode()[0] if not val.mode().empty else None)
         ).reset_index()
 
-        # 7. Modelo de Optimización (Sintaxis Blindada para Render)
+      # 7. Modelo de Optimización (Sintaxis Blindada para Render)
         holdings = df_holdings['holding_id'].tolist()
         bds = bd_list
 
         h_do = df_holdings.set_index('holding_id')['total_do'].to_dict()
         h_shops = df_holdings.set_index('holding_id')['total_shops'].to_dict()
+        h_brands = df_holdings.set_index('holding_id')['total_brands'].to_dict() # <-- AÑADIDO: Diccionario de marcas
         h_reassign = df_holdings.set_index('holding_id')['is_reassignable'].to_dict()
         h_current_bd = df_holdings.set_index('holding_id')['current_bd'].to_dict()
 
@@ -97,8 +99,19 @@ def ejecutar_nivelacion():
         max_do = pulp.LpVariable("Max_DO", 0, None, pulp.LpContinuous)
         min_sh = pulp.LpVariable("Min_Sh", 0, None, pulp.LpContinuous)
         max_sh = pulp.LpVariable("Max_Sh", 0, None, pulp.LpContinuous)
+        min_br = pulp.LpVariable("Min_Br", 0, None, pulp.LpContinuous)
+        max_br = pulp.LpVariable("Max_Br", 0, None, pulp.LpContinuous)
 
-        prob += (max_do - min_do) + (max_sh - min_sh)
+        # Pesos Dinámicos
+        sum_do = sum(h_do.values())
+        sum_sh = sum(h_shops.values())
+        sum_br = sum(h_brands.values())
+
+        peso_do = 1
+        peso_sh = (sum_do / sum_sh) if sum_sh > 0 else 1
+        peso_br = (sum_do / sum_br) if sum_br > 0 else 1
+
+        prob += peso_do * (max_do - min_do) + peso_sh * (max_sh - min_sh) + peso_br * (max_br - min_br)
 
         for h in holdings:
             prob += pulp.lpSum(x[h][b] for b in bds) == 1
@@ -110,10 +123,14 @@ def ejecutar_nivelacion():
         for b in bds:
             c_do = pulp.lpSum(x[h][b] * h_do[h] for h in holdings)
             c_sh = pulp.lpSum(x[h][b] * h_shops[h] for h in holdings)
+            c_br = pulp.lpSum(x[h][b] * h_brands[h] for h in holdings) # <-- AÑADIDO: Cálculo de marcas
+
             prob += c_do >= min_do
             prob += c_do <= max_do
             prob += c_sh >= min_sh
             prob += c_sh <= max_sh
+            prob += c_br >= min_br # <-- AÑADIDO: Restricción de marcas
+            prob += c_br <= max_br # <-- AÑADIDO: Restricción de marcas
 
         prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=120))
         
